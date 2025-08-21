@@ -789,17 +789,58 @@ class _ConvertToArrowSchema(SchemaVisitorPerPrimitiveType[pa.DataType]):
 def _convert_scalar(value: Any, iceberg_type: IcebergType) -> pa.scalar:
     if not isinstance(iceberg_type, PrimitiveType):
         raise ValueError(f"Expected primitive type, got: {iceberg_type}")
+
+    # Workaround for UUID comparison: use binary(16) instead of UUID extension type
+    # since PyArrow doesn't support comparison kernels for UUID extension types
+    if isinstance(iceberg_type, UUIDType):
+        # Convert UUID value to bytes if needed
+        if isinstance(value, uuid.UUID):
+            value = value.bytes
+        elif isinstance(value, str):
+            value = uuid.UUID(value).bytes
+        return pa.scalar(value=value, type=pa.binary(16))
+
     return pa.scalar(value=value, type=schema_to_pyarrow(iceberg_type))
 
 
 class _ConvertToArrowExpression(BoundBooleanExpressionVisitor[pc.Expression]):
     def visit_in(self, term: BoundTerm[Any], literals: Set[Any]) -> pc.Expression:
-        pyarrow_literals = pa.array(literals, type=schema_to_pyarrow(term.ref().field.field_type))
-        return pc.field(term.ref().field.name).isin(pyarrow_literals)
+        # Workaround for UUID comparison: use binary(16) for UUID types
+        field_expr = pc.field(term.ref().field.name)
+        if isinstance(term.ref().field.field_type, UUIDType):
+            # Convert UUID literals to bytes
+            literals_as_bytes = []
+            for lit in literals:
+                if isinstance(lit, uuid.UUID):
+                    literals_as_bytes.append(lit.bytes)
+                elif isinstance(lit, str):
+                    literals_as_bytes.append(uuid.UUID(lit).bytes)
+                else:
+                    literals_as_bytes.append(lit)
+            pyarrow_literals = pa.array(literals_as_bytes, type=pa.binary(16))
+            field_expr = field_expr.cast(pa.binary(16))
+        else:
+            pyarrow_literals = pa.array(literals, type=schema_to_pyarrow(term.ref().field.field_type))
+        return field_expr.isin(pyarrow_literals)
 
     def visit_not_in(self, term: BoundTerm[Any], literals: Set[Any]) -> pc.Expression:
-        pyarrow_literals = pa.array(literals, type=schema_to_pyarrow(term.ref().field.field_type))
-        return ~pc.field(term.ref().field.name).isin(pyarrow_literals)
+        # Workaround for UUID comparison: use binary(16) for UUID types
+        field_expr = pc.field(term.ref().field.name)
+        if isinstance(term.ref().field.field_type, UUIDType):
+            # Convert UUID literals to bytes
+            literals_as_bytes = []
+            for lit in literals:
+                if isinstance(lit, uuid.UUID):
+                    literals_as_bytes.append(lit.bytes)
+                elif isinstance(lit, str):
+                    literals_as_bytes.append(uuid.UUID(lit).bytes)
+                else:
+                    literals_as_bytes.append(lit)
+            pyarrow_literals = pa.array(literals_as_bytes, type=pa.binary(16))
+            field_expr = field_expr.cast(pa.binary(16))
+        else:
+            pyarrow_literals = pa.array(literals, type=schema_to_pyarrow(term.ref().field.field_type))
+        return ~field_expr.isin(pyarrow_literals)
 
     def visit_is_nan(self, term: BoundTerm[Any]) -> pc.Expression:
         ref = pc.field(term.ref().field.name)
@@ -816,22 +857,46 @@ class _ConvertToArrowExpression(BoundBooleanExpressionVisitor[pc.Expression]):
         return pc.field(term.ref().field.name).is_valid()
 
     def visit_equal(self, term: BoundTerm[Any], literal: Literal[Any]) -> pc.Expression:
-        return pc.field(term.ref().field.name) == _convert_scalar(literal.value, term.ref().field.field_type)
+        # Workaround for UUID comparison: cast UUID fields to binary before comparison
+        field_expr = pc.field(term.ref().field.name)
+        if isinstance(term.ref().field.field_type, UUIDType):
+            field_expr = field_expr.cast(pa.binary(16))
+        return field_expr == _convert_scalar(literal.value, term.ref().field.field_type)
 
     def visit_not_equal(self, term: BoundTerm[Any], literal: Literal[Any]) -> pc.Expression:
-        return pc.field(term.ref().field.name) != _convert_scalar(literal.value, term.ref().field.field_type)
+        # Workaround for UUID comparison: cast UUID fields to binary before comparison
+        field_expr = pc.field(term.ref().field.name)
+        if isinstance(term.ref().field.field_type, UUIDType):
+            field_expr = field_expr.cast(pa.binary(16))
+        return field_expr != _convert_scalar(literal.value, term.ref().field.field_type)
 
     def visit_greater_than_or_equal(self, term: BoundTerm[Any], literal: Literal[Any]) -> pc.Expression:
-        return pc.field(term.ref().field.name) >= _convert_scalar(literal.value, term.ref().field.field_type)
+        # Workaround for UUID comparison: cast UUID fields to binary before comparison
+        field_expr = pc.field(term.ref().field.name)
+        if isinstance(term.ref().field.field_type, UUIDType):
+            field_expr = field_expr.cast(pa.binary(16))
+        return field_expr >= _convert_scalar(literal.value, term.ref().field.field_type)
 
     def visit_greater_than(self, term: BoundTerm[Any], literal: Literal[Any]) -> pc.Expression:
-        return pc.field(term.ref().field.name) > _convert_scalar(literal.value, term.ref().field.field_type)
+        # Workaround for UUID comparison: cast UUID fields to binary before comparison
+        field_expr = pc.field(term.ref().field.name)
+        if isinstance(term.ref().field.field_type, UUIDType):
+            field_expr = field_expr.cast(pa.binary(16))
+        return field_expr > _convert_scalar(literal.value, term.ref().field.field_type)
 
     def visit_less_than(self, term: BoundTerm[Any], literal: Literal[Any]) -> pc.Expression:
-        return pc.field(term.ref().field.name) < _convert_scalar(literal.value, term.ref().field.field_type)
+        # Workaround for UUID comparison: cast UUID fields to binary before comparison
+        field_expr = pc.field(term.ref().field.name)
+        if isinstance(term.ref().field.field_type, UUIDType):
+            field_expr = field_expr.cast(pa.binary(16))
+        return field_expr < _convert_scalar(literal.value, term.ref().field.field_type)
 
     def visit_less_than_or_equal(self, term: BoundTerm[Any], literal: Literal[Any]) -> pc.Expression:
-        return pc.field(term.ref().field.name) <= _convert_scalar(literal.value, term.ref().field.field_type)
+        # Workaround for UUID comparison: cast UUID fields to binary before comparison
+        field_expr = pc.field(term.ref().field.name)
+        if isinstance(term.ref().field.field_type, UUIDType):
+            field_expr = field_expr.cast(pa.binary(16))
+        return field_expr <= _convert_scalar(literal.value, term.ref().field.field_type)
 
     def visit_starts_with(self, term: BoundTerm[Any], literal: Literal[Any]) -> pc.Expression:
         return pc.starts_with(pc.field(term.ref().field.name), literal.value)
@@ -2810,18 +2875,30 @@ def _determine_partitions(spec: PartitionSpec, schema: Schema, arrow_table: pa.T
             partition_spec=spec,
             schema=schema,
         )
+        
+        # Build filter expressions for each partition field
+        filter_expressions = []
+        for _field, partition_field_name in zip(spec.fields, partition_fields):
+            partition_value = unique_partition[partition_field_name]
+            if partition_value is not None:
+                # Get the field and its type from the arrow table
+                field_ref = pc.field(partition_field_name)
+                field_type = arrow_table.schema.field(partition_field_name).type
+
+                # Workaround for UUID comparison: cast UUID fields to binary before comparison
+                if isinstance(field_type, pa.lib.ExtensionType) and field_type.extension_name == "arrow.uuid":
+                    field_ref = field_ref.cast(pa.binary(16))
+                    # If the value is UUID bytes, use it directly for comparison
+                    if isinstance(partition_value, bytes) and len(partition_value) == 16:
+                        filter_expressions.append(field_ref == pa.scalar(partition_value, type=pa.binary(16)))
+                    else:
+                        filter_expressions.append(field_ref == partition_value)
+                else:
+                    filter_expressions.append(field_ref == partition_value)
+            else:
+                filter_expressions.append(pc.field(partition_field_name).is_null())
         filtered_table = arrow_table.filter(
-            functools.reduce(
-                operator.and_,
-                [
-                    (
-                        pc.field(partition_field_name) == unique_partition[partition_field_name]
-                        if unique_partition[partition_field_name] is not None
-                        else pc.field(partition_field_name).is_null()
-                    )
-                    for field, partition_field_name in zip(spec.fields, partition_fields)
-                ],
-            )
+            functools.reduce(operator.and_, filter_expressions)
         )
         filtered_table = filtered_table.drop_columns(partition_fields)
 
